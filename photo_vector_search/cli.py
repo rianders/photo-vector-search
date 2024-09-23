@@ -111,9 +111,8 @@ def search_photos(query_image, model, db_path, k, verbose, view):
 @click.option('--model', default=DEFAULT_MODEL, help='Ollama model to use')
 @click.option('--db-path', type=click.Path(path_type=Path), default=DEFAULT_DB_PATH, help='Directory where ChromaDB is stored')
 @click.option('--k', default=5, help='Number of results to return')
-@click.option('--verbose', is_flag=True, help='Enable verbose output')
 @click.option('--view', is_flag=True, help='Open images for viewing')
-def search_photos_by_text(query_text, model, db_path, k, verbose, view):
+def search_photos_by_text(query_text, model, db_path, k, view):
     click.echo(f"Searching for: '{query_text}'")
     click.echo(f"Using model: {model}")
     click.echo(f"Database path: {db_path}")
@@ -133,19 +132,22 @@ def search_photos_by_text(query_text, model, db_path, k, verbose, view):
 
             click.echo(f"\nFound {len(results)} results:")
             
-            for i, (photo_path, distance) in enumerate(results, 1):
-                click.echo(f"Result {i}: {photo_path} (Distance: {distance})")
+            for i, (photo_path, distance, description) in enumerate(results, 1):
+                click.echo(f"\nResult {i}:")
+                click.echo(f"Path: {photo_path}")
+                click.echo(f"Distance: {distance}")
+                click.echo(f"Description: {description}")
                 
                 if view:
                     click.echo("Opening image...")
                     open_image(photo_path)
-                    if i < len(results):
-                        if not click.confirm('View next image?'):
-                            break
+                    if i < len(results) and not click.confirm('View next image?'):
+                        break
 
         except Exception as e:
             click.echo(f"An error occurred during the search: {str(e)}")
             click.echo("Please check the console output for more detailed error information.")
+
 
 @cli.command()
 def list_models():
@@ -177,46 +179,36 @@ def delete_store(db_path):
         click.echo(f"An error occurred while trying to delete the vector store: {e}")
 
 @cli.command()
-@click.argument('query_text')
+@click.argument('image_path', type=click.Path(exists=True, path_type=Path))
 @click.option('--model', default=DEFAULT_MODEL, help='Ollama model to use')
 @click.option('--db-path', type=click.Path(path_type=Path), default=DEFAULT_DB_PATH, help='Directory where ChromaDB is stored')
-@click.option('--k', default=5, help='Number of results to return')
-@click.option('--verbose', is_flag=True, help='Enable verbose output')
-@click.option('--view', is_flag=True, help='Open images for viewing')
-def search_photos_by_text(query_text, model, db_path, k, verbose, view):
-    click.echo(f"Searching for: '{query_text}'")
+@click.option('--view', is_flag=True, help='Open the image for viewing')
+def examine_image(image_path, model, db_path, view):
+    """Examine a single image's description and metadata."""
+    click.echo(f"Examining image: {image_path}")
     click.echo(f"Using model: {model}")
     click.echo(f"Database path: {db_path}")
-    click.echo(f"Number of results requested: {k}")
 
     store = PhotoVectorStore(model_name=model, persist_directory=str(db_path))
     
-    with tqdm(total=1, desc="Searching", unit="query") as pbar:
-        try:
-            results = store.search_by_text(query_text, k)
-            
-            pbar.update(1)
+    image_info = store.examine_image(image_path)
+    
+    if image_info is None:
+        click.echo("Image not found in the database. Make sure you've indexed this image.")
+        return
 
-            if not results:
-                click.echo("No matching images found.")
-                return
+    click.echo("\nImage Information:")
+    click.echo(f"Path: {image_info['path']}")
+    click.echo(f"Description: {image_info['description']}")
+    click.echo(f"Metadata: {image_info['metadata']}")
+    
+    embedding = np.array(image_info['embedding'])
+    click.echo(f"Embedding shape: {embedding.shape}")
+    click.echo(f"Embedding summary: min={embedding.min():.4f}, max={embedding.max():.4f}, mean={embedding.mean():.4f}, std={embedding.std():.4f}")
 
-            click.echo(f"\nFound {len(results)} results:")
-            
-            for i, (photo_path, distance) in enumerate(results, 1):
-                click.echo(f"Result {i}: {photo_path} (Distance: {distance})")
-                
-                if view:
-                    click.echo("Opening image...")
-                    open_image(photo_path)
-                    if i < len(results):
-                        if not click.confirm('View next image?'):
-                            break
-
-        except Exception as e:
-            click.echo(f"An error occurred during the search: {str(e)}")
-            click.echo("Please check the console output for more detailed error information.")
-
+    if view:
+        click.echo("\nOpening image...")
+        open_image(image_path)
 
 if __name__ == '__main__':
     cli()

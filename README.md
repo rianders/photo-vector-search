@@ -1,14 +1,16 @@
 # Photo Vector Search
 
-Photo Vector Search is a Python-based CLI tool that allows you to index and search for similar images using advanced AI models. It uses Ollama for image embedding generation and ChromaDB for efficient vector storage and retrieval.
+Photo Vector Search is a Python-based CLI tool that allows you to index and search for similar images using advanced AI models. It uses Ollama's LLaVA-Phi3 model for image embedding generation and description, and ChromaDB for efficient vector storage and retrieval.
 
 ## Features
 
 - Index photos from a specified directory
-- Search for similar photos using a query image
+- Search for similar photos using a query image or text
+- Examine individual images, including their AI-generated descriptions
 - View similar images using your default image viewer
+- Regenerate descriptions for individual images
 - Clear or delete the vector store
-- Utilizes Ollama's AI models for image embedding generation
+- Utilizes Ollama's LLaVA-Phi3 model for image understanding and text processing
 - Efficient vector storage and retrieval using ChromaDB
 - Cross-platform compatibility using pathlib
 
@@ -18,7 +20,7 @@ Before you begin, ensure you have met the following requirements:
 
 - Python 3.7 or higher
 - Poetry (for dependency management)
-- Ollama installed and running on your system
+- Ollama installed and running on your system with the LLaVA-Phi3 model
 
 ## Installation
 
@@ -42,20 +44,21 @@ The tool provides several commands for managing and using the photo vector searc
 To index photos from a directory:
 
 ```
-poetry run photo-vector-search index-photos [PHOTO_DIRECTORY] --model [MODEL_NAME] --db-path [DB_PATH] [--update]
+poetry run photo-vector-search index-photos [PHOTO_DIRECTORY] --model [MODEL_NAME] --db-path [DB_PATH] [--update] [--max-workers N]
 ```
 
 - `PHOTO_DIRECTORY`: The directory containing the photos to index (default: ~/Documents/image_tests)
-- `MODEL_NAME`: The Ollama model to use for embedding generation (default: llava-phi3)
+- `MODEL_NAME`: The Ollama model to use for embedding generation (default: llava-phi3:latest)
 - `DB_PATH`: The directory to store the ChromaDB database (default: ~/tmp/my_chroma_db)
 - `--update`: Update existing entries instead of skipping them
+- `--max-workers`: Maximum number of worker threads for parallel processing (default: 4)
 
 Example:
 ```
-poetry run photo-vector-search index-photos ~/my-photos --model llava-phi3 --db-path ~/my-vector-db --update
+poetry run photo-vector-search index-photos ~/my-photos --model llava-phi3:latest --db-path ~/my-vector-db --update --max-workers 8
 ```
 
-### Searching for Similar Photos
+### Searching for Similar Photos by Image
 
 To search for photos similar to a query image:
 
@@ -72,7 +75,39 @@ poetry run photo-vector-search search-photos [QUERY_IMAGE] --model [MODEL_NAME] 
 
 Example:
 ```
-poetry run photo-vector-search search-photos ~/query-image.jpg --model llava-phi3 --db-path ~/my-vector-db --k 10 --verbose --view
+poetry run photo-vector-search search-photos ~/query-image.jpg --model llava-phi3:latest --db-path ~/my-vector-db --k 10 --verbose --view
+```
+
+### Searching for Photos by Text
+
+To search for photos using a text query:
+
+```
+poetry run photo-vector-search search-photos-by-text [QUERY_TEXT] --model [MODEL_NAME] --db-path [DB_PATH] --k [NUM_RESULTS] [--view]
+```
+
+- `QUERY_TEXT`: The text query to search for
+- Other options are the same as for image search
+
+Example:
+```
+poetry run photo-vector-search search-photos-by-text "a cat sitting on a couch" --model llava-phi3:latest --db-path ~/my-vector-db --k 5 --view
+```
+
+### Examining a Single Image
+
+To examine the details of a single indexed image:
+
+```
+poetry run photo-vector-search examine-image [IMAGE_PATH] --model [MODEL_NAME] --db-path [DB_PATH] [--view] [--regenerate]
+```
+
+- `IMAGE_PATH`: Path to the image to examine
+- `--regenerate`: Regenerate the image description
+
+Example:
+```
+poetry run photo-vector-search examine-image ~/my-photos/cat.jpg --model llava-phi3:latest --db-path ~/my-vector-db --view --regenerate
 ```
 
 ### Listing Available Models
