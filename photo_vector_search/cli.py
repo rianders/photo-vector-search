@@ -2,6 +2,7 @@ import click
 from pathlib import Path
 from .photo_vector_search import PhotoVectorStore
 import time
+import numpy as np
 from tqdm import tqdm
 import shutil
 from .utils import open_image
