@@ -1,0 +1,25 @@
+[tool.poetry]
+name = "photo-vector-search"
+version = "0.1.0"
+description = ""
+authors = ["ricklon <rianders@docs.rutgers.edu>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.11"
+click = "^8.1.7"
+pillow = "^10.4.0"
+numpy = "^2.1.1"
+chromadb = "^0.5.7"
+ollama = "^0.3.3"
+tqdm = "^4.66.5"
+requests = "^2.32.3"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+
+[tool.poetry.scripts]
+photo-vector-search = "photo_vector_search.cli:cli"
