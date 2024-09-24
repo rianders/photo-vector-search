@@ -1,17 +1,14 @@
 import logging
 import json
-import requests
 from pathlib import Path
 from PIL import Image
-import base64
 from io import BytesIO
-import uuid
+from ollama import generate
 import chromadb
 
 class PhotoVectorStore:
-    def __init__(self, model_name='llava-phi3:latest', persist_directory='./chroma_db', ollama_host="http://localhost:11434"):
+    def __init__(self, model_name='llava-phi3:latest', persist_directory='./chroma_db'):
         self.model_name = model_name
-        self.ollama_host = ollama_host
         self.chroma_client = chromadb.PersistentClient(path=str(Path(persist_directory).resolve()))
         self.collection = self.chroma_client.get_or_create_collection(
             name="photo_collection",
@@ -28,7 +25,7 @@ class PhotoVectorStore:
         
         try:
             with Image.open(photo_path) as img:
-                img_base64 = self._preprocess_image(img)
+                image_bytes = self._preprocess_image(img)
             self.logger.debug(f"Image preprocessed successfully: {photo_path}")
         except Exception as e:
             self.logger.error(f"Error opening image {photo_path}: {str(e)}")
@@ -36,17 +33,11 @@ class PhotoVectorStore:
 
         try:
             self.logger.debug(f"Generating embedding and description for {photo_path}")
-            embedding, description = self._get_embedding_and_description(img_base64, custom_prompt)
+            embedding, description = self._get_embedding_and_description(image_bytes, custom_prompt)
             self.logger.debug(f"Generated embedding (length: {len(embedding)}) and description (length: {len(description)})")
-        except requests.RequestException as e:
-            self.logger.error(f"API request failed for {photo_path}: {str(e)}")
-            return False, f"API request failed: {str(e)}"
-        except json.JSONDecodeError as e:
-            self.logger.error(f"JSON parsing error for {photo_path}: {str(e)}")
-            return False, f"JSON parsing error: {str(e)}"
         except Exception as e:
-            self.logger.error(f"Unexpected error processing {photo_path}: {str(e)}", exc_info=True)
-            return False, f"Unexpected error: {str(e)}"
+            self.logger.error(f"Error generating embedding and description for {photo_path}: {str(e)}", exc_info=True)
+            return False, f"Error generating embedding and description: {str(e)}"
 
         try:
             self.logger.debug(f"Checking for existing entries for {photo_path} and aspect '{aspect_name}'")
@@ -57,7 +48,7 @@ class PhotoVectorStore:
                         {"aspect_name": aspect_name}
                     ]
                 },
-                include=["metadatas", "documents", "ids"]
+                include=["metadatas", "documents"]
             )
 
             entry_id = f"{str(photo_path)}_{aspect_name}"
@@ -89,64 +80,67 @@ class PhotoVectorStore:
             self.logger.error(f"Error updating ChromaDB for {photo_path}: {str(e)}", exc_info=True)
             return False, f"Database update error: {str(e)}"
 
-    def _get_embedding_and_description(self, image_base64, custom_prompt=None):
-        url = f"{self.ollama_host}/api/generate"
-        prompt = custom_prompt or "Describe this image in detail:"
-        payload = {
-            "model": self.model_name,
-            "prompt": prompt,
-            "image": image_base64,
-            "stream": False
-        }
-        headers = {'Content-Type': 'application/json'}
+    def _get_embedding_and_description(self, image_bytes, custom_prompt=None):
+        prompt = custom_prompt or "Describe this image in detail."
+        self.logger.debug(f"Sending request to Ollama API with prompt: {prompt}")
         
-        self.logger.debug(f"Sending request to Ollama API: {url}")
-        response = requests.post(url, json=payload, headers=headers)
-        response.raise_for_status()
-        
-        self.logger.debug(f"Received response from Ollama API: {response.status_code}")
-        result = response.json()
-        
-        description = result.get('response', '').strip()
-        self.logger.debug(f"Extracted description (length: {len(description)})")
-        
-        embedding = self._get_text_embedding(description)
-        self.logger.debug(f"Generated embedding (length: {len(embedding)})")
-        
-        return embedding, description
+        try:
+            responses = generate(
+                self.model_name,
+                prompt,
+                images=[image_bytes],
+                embedding=True,
+                stream=False
+            )
+
+            description = ''
+            embedding = []
+            for response in responses:
+                description += response.get('response', '')
+                if not embedding:
+                    embedding = response.get('embedding', [])
+            description = description.strip()
+            self.logger.debug(f"Extracted description (length: {len(description)})")
+            self.logger.debug(f"Received embedding (length: {len(embedding)})")
+            return embedding, description
+        except Exception as e:
+            self.logger.error(f"Ollama generate error: {str(e)}", exc_info=True)
+            raise
 
     def _get_text_embedding(self, text):
-        url = f"{self.ollama_host}/api/embeddings"
-        payload = {
-            "model": self.model_name,
-            "prompt": text
-        }
-        headers = {'Content-Type': 'application/json'}
-        self.logger.debug(f"Sending embedding request to Ollama API: {url}")
-        response = requests.post(url, json=payload, headers=headers)
-        response.raise_for_status()
-        result = response.json()
-        embedding = result.get('embedding', [])
-        self.logger.debug(f"Received embedding (length: {len(embedding)})")
-        return embedding
+        try:
+            responses = generate(
+                self.model_name,
+                text,
+                embedding=True,
+                stream=False
+            )
+            embedding = []
+            for response in responses:
+                if not embedding:
+                    embedding = response.get('embedding', [])
+            self.logger.debug(f"Received embedding (length: {len(embedding)})")
+            return embedding
+        except Exception as e:
+            self.logger.error(f"Ollama embedding error: {str(e)}", exc_info=True)
+            return []
 
-    @staticmethod
-    def _preprocess_image(img):
+    def _preprocess_image(self, img):
         if img.mode != 'RGB':
             img = img.convert('RGB')
         if max(img.size) > 1024:
             img.thumbnail((1024, 1024))
         buffered = BytesIO()
         img.save(buffered, format="PNG")
-        return base64.b64encode(buffered.getvalue()).decode('utf-8')
+        return buffered.getvalue()  # Return raw bytes instead of base64 string
 
     def search(self, query_image=None, query_text=None, aspect_name=None, k=5):
         self.logger.info(f"Searching with aspect: {aspect_name}, k: {k}")
         if query_image:
             self.logger.debug(f"Processing query image: {query_image}")
             with Image.open(query_image) as img:
-                img_base64 = self._preprocess_image(img)
-            embedding, _ = self._get_embedding_and_description(img_base64)
+                image_bytes = self._preprocess_image(img)
+            embedding, _ = self._get_embedding_and_description(image_bytes)
         elif query_text:
             self.logger.debug(f"Processing query text: {query_text}")
             embedding = self._get_text_embedding(query_text)
@@ -204,10 +198,11 @@ class PhotoVectorStore:
             return False, f"Error deleting photo: {str(e)}"
 
     @classmethod
-    def list_available_models(cls, ollama_host="http://localhost:11434"):
-        url = f"{ollama_host}/api/tags"
-        response = requests.get(url)
-        response.raise_for_status()
-        models = [model['name'] for model in response.json()['models']]
-        logging.getLogger(__name__).debug(f"Available models: {models}")
-        return models
+    def list_available_models(cls):
+        from ollama import models
+        try:
+            model_list = models()
+            return [model['name'] for model in model_list]
+        except Exception as e:
+            logging.getLogger(__name__).error(f"Error listing models: {str(e)}", exc_info=True)
+            return []
