@@ -14,6 +14,7 @@ chromadb = "^0.5.7"
 ollama = "^0.3.3"
 tqdm = "^4.66.5"
 requests = "^2.32.3"
+logging = "^0.4.9.6"
 
 
 [build-system]

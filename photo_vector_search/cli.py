@@ -3,9 +3,7 @@ from pathlib import Path
 from .photo_vector_search import PhotoVectorStore
 import time
 from tqdm import tqdm
-import shutil
-from .utils import open_image
-import ollama
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 DEFAULT_DOC_SOURCE = Path.home() / "Documents" / "image_tests"
 DEFAULT_DB_PATH = Path.home() / "tmp" / "my_chroma_db"
@@ -14,182 +12,98 @@ DEFAULT_MODEL = "llava-phi3:latest"
 @click.group()
 def cli():
     pass
+
 @cli.command()
 @click.argument('photo_directory', type=click.Path(exists=True, path_type=Path), default=DEFAULT_DOC_SOURCE)
 @click.option('--model', default=DEFAULT_MODEL, help='Ollama model to use')
 @click.option('--db-path', type=click.Path(path_type=Path), default=DEFAULT_DB_PATH, help='Directory to store ChromaDB')
-@click.option('--update', is_flag=True, help='Update existing entries instead of skipping')
-def index_photos(photo_directory, model, db_path, update):
-    try:
-        available_models = PhotoVectorStore.list_available_models()
-        if model not in available_models:
-            click.echo(f"Error: Model '{model}' is not available. Available models are: {', '.join(available_models)}")
-            return
+@click.option('--prompt', default=None, help='Custom prompt for image description')
+@click.option('--aspect', default='default', help='Name of the aspect to index')
+@click.option('--max-workers', default=4, help='Maximum number of worker threads')
+def index_photos(photo_directory, model, db_path, prompt, aspect, max_workers):
+    store = PhotoVectorStore(model_name=model, persist_directory=str(db_path))
+    
+    image_files = list(photo_directory.rglob("*"))
+    image_files = [f for f in image_files if f.suffix.lower() in ('.png', '.jpg', '.jpeg')]
 
-        store = PhotoVectorStore(model_name=model, persist_directory=str(db_path))
-        total_time = 0
-        indexed_count = 0
-        error_count = 0
+    def process_image(file_path):
+        success, message = store.add_or_update_photo(file_path, custom_prompt=prompt, aspect_name=aspect)
+        return success, message
 
-        image_files = list(photo_directory.rglob("*"))
-        image_files = [f for f in image_files if f.suffix.lower() in ('.png', '.jpg', '.jpeg')]
+    successful_count = 0
+    error_count = 0
 
-        with tqdm(total=len(image_files), desc="Indexing Progress", unit="image") as pbar:
-            for file_path in image_files:
-                start_time = time.time()
-                try:
-                    description = store.add_photo(file_path)
-                    end_time = time.time()
-                    processing_time = end_time - start_time
-                    total_time += processing_time
-                    indexed_count += 1
-                    tqdm.write(f"\nIndexed: {file_path}")
-                    tqdm.write(f"Description: {description[:100]}...")  # Display first 100 characters of the description
-                    pbar.set_postfix({"Last": f"{processing_time:.2f}s", "Avg": f"{total_time/indexed_count:.2f}s"})
-                except Exception as e:
-                    error_count += 1
-                    tqdm.write(f"Error processing {file_path}: {str(e)}")
-                    tqdm.write(f"Error type: {type(e).__name__}")
-                    import traceback
-                    tqdm.write(traceback.format_exc())
-                finally:
-                    pbar.update(1)
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [executor.submit(process_image, file_path) for file_path in image_files]
+        for future in tqdm(as_completed(futures), total=len(image_files), desc="Indexing Progress"):
+            success, message = future.result()
+            if success:
+                successful_count += 1
+            else:
+                error_count += 1
+            tqdm.write(message)
 
-        avg_time = total_time / indexed_count if indexed_count > 0 else 0
-        click.echo(f"\nIndexed {indexed_count} photos in total")
-        click.echo(f"Encountered errors with {error_count} photos")
-        click.echo(f"Total time: {total_time:.2f} seconds")
-        click.echo(f"Average time per photo: {avg_time:.2f} seconds")
-    except Exception as e:
-        click.echo(f"An unexpected error occurred: {str(e)}")
-        click.echo(f"Error type: {type(e).__name__}")
-        import traceback
-        click.echo(traceback.format_exc())
+    click.echo(f"\nIndexing complete:")
+    click.echo(f"Successfully processed: {successful_count} images")
+    click.echo(f"Errors encountered: {error_count} images")
+
+@cli.command()
+@click.argument('photo_path', type=click.Path(exists=True, path_type=Path))
+@click.option('--model', default=DEFAULT_MODEL, help='Ollama model to use')
+@click.option('--db-path', type=click.Path(path_type=Path), default=DEFAULT_DB_PATH, help='Directory where ChromaDB is stored')
+@click.option('--prompt', required=True, help='Custom prompt for the new aspect')
+@click.option('--aspect', required=True, help='Name of the new aspect')
+def add_aspect(photo_path, model, db_path, prompt, aspect):
+    store = PhotoVectorStore(model_name=model, persist_directory=str(db_path))
+    store.add_or_update_photo(photo_path, custom_prompt=prompt, aspect_name=aspect)
+    click.echo(f"Added aspect '{aspect}' to {photo_path}")
 
 @cli.command()
 @click.argument('query_image', type=click.Path(exists=True, path_type=Path))
 @click.option('--model', default=DEFAULT_MODEL, help='Ollama model to use')
 @click.option('--db-path', type=click.Path(path_type=Path), default=DEFAULT_DB_PATH, help='Directory where ChromaDB is stored')
 @click.option('--k', default=5, help='Number of results to return')
-@click.option('--verbose', is_flag=True, help='Enable verbose output')
+@click.option('--aspect', default='default', help='Aspect to search by')
+@click.option('--verbose', is_flag=True, help='Display detailed information including descriptions')
 @click.option('--view', is_flag=True, help='Open images for viewing')
-def search_photos(query_image, model, db_path, k, verbose, view):
-    try:
-        store = PhotoVectorStore(model_name=model, persist_directory=str(db_path))
-        with tqdm(total=1, desc="Searching", unit="query") as pbar:
-            if verbose:
-                results = store.search_verbose(query_image, k)
-                for i, result in enumerate(results, 1):
-                    click.echo(f"\nResult {i}:")
-                    click.echo(f"Path: {result['path']}")
-                    click.echo(f"Distance: {result['distance']}")
-                    click.echo(f"Description: {result['description']}")
-                    if view:
-                        click.echo("Opening image...")
-                        open_image(result['path'])
-                        if i < len(results):
-                            if not click.confirm('View next image?'):
-                                break
-            else:
-                results = store.search(query_image, k)
-                for i, (photo_path, distance) in enumerate(results, 1):
-                    click.echo(f"Result {i}: {photo_path} (Distance: {distance})")
-                    if view:
-                        click.echo("Opening image...")
-                        open_image(photo_path)
-                        if i < len(results):
-                            if not click.confirm('View next image?'):
-                                break
-            
-            if view:
-                click.echo("Opening query image...")
-                open_image(query_image)
-            
-            pbar.update(1)
-    except ollama.ResponseError as e:
-        click.echo(f"An error occurred while communicating with Ollama: {str(e)}")
-    except Exception as e:
-        click.echo(f"An unexpected error occurred: {str(e)}")
+def search_photos(query_image, model, db_path, k, aspect, verbose, view):
+    store = PhotoVectorStore(model_name=model, persist_directory=str(db_path))
+    results = store.search(query_image=query_image, aspect_name=aspect, k=k)
+
+    for photo_path, distance, description in results:
+        click.echo(f"{photo_path}: Distance {distance}")
+        if verbose:
+            click.echo(f"Description ({aspect}): {description}")
+        if view:
+            click.launch(str(photo_path))
+        click.echo()
 
 @cli.command()
 @click.argument('query_text')
 @click.option('--model', default=DEFAULT_MODEL, help='Ollama model to use')
 @click.option('--db-path', type=click.Path(path_type=Path), default=DEFAULT_DB_PATH, help='Directory where ChromaDB is stored')
 @click.option('--k', default=5, help='Number of results to return')
+@click.option('--aspect', default='default', help='Aspect to search by')
+@click.option('--verbose', is_flag=True, help='Display detailed information including descriptions')
 @click.option('--view', is_flag=True, help='Open images for viewing')
-def search_photos_by_text(query_text, model, db_path, k, view):
-    try:
-        click.echo(f"Searching for: '{query_text}'")
-        click.echo(f"Using model: {model}")
-        click.echo(f"Database path: {db_path}")
-        click.echo(f"Number of results requested: {k}")
+def search_photos_by_text(query_text, model, db_path, k, aspect, verbose, view):
+    store = PhotoVectorStore(model_name=model, persist_directory=str(db_path))
+    results = store.search(query_text=query_text, aspect_name=aspect, k=k)
 
-        store = PhotoVectorStore(model_name=model, persist_directory=str(db_path))
-        
-        with tqdm(total=1, desc="Searching", unit="query") as pbar:
-            results = store.search_by_text(query_text, k)
-            
-            pbar.update(1)
-
-            if not results:
-                click.echo("No matching images found.")
-                return
-
-            click.echo(f"\nFound {len(results)} results:")
-            
-            for i, result in enumerate(results, 1):
-                click.echo(f"\nResult {i}:")
-                click.echo(f"Path: {result['path']}")
-                click.echo(f"Distance: {result['distance']}")
-                click.echo(f"Description: {result['description']}")
-                
-                if view:
-                    click.echo("Opening image...")
-                    open_image(result['path'])
-                    if i < len(results) and not click.confirm('View next image?'):
-                        break
-
-    except ollama.ResponseError as e:
-        click.echo(f"An error occurred while communicating with Ollama: {str(e)}")
-    except Exception as e:
-        click.echo(f"An unexpected error occurred: {str(e)}")
+    for photo_path, distance, description in results:
+        click.echo(f"{photo_path}: Distance {distance}")
+        if verbose:
+            click.echo(f"Description ({aspect}): {description}")
+        if view:
+            click.launch(str(photo_path))
+        click.echo()
 
 @cli.command()
 def list_models():
-    try:
-        models = PhotoVectorStore.list_available_models()
-        click.echo("Available models:")
-        for model in models:
-            click.echo(f"- {model}")
-    except ollama.ResponseError as e:
-        click.echo(f"An error occurred while communicating with Ollama: {str(e)}")
-    except Exception as e:
-        click.echo(f"An unexpected error occurred: {str(e)}")
-
-@cli.command()
-@click.option('--db-path', type=click.Path(path_type=Path), default=DEFAULT_DB_PATH, help='Directory where ChromaDB is stored')
-@click.confirmation_option(prompt='Are you sure you want to clear the vector store?')
-def clear_store(db_path):
-    """Clear all entries from the vector store."""
-    try:
-        store = PhotoVectorStore(persist_directory=str(db_path))
-        store.clear_store()
-        click.echo("Vector store cleared successfully.")
-    except Exception as e:
-        click.echo(f"An error occurred while clearing the vector store: {str(e)}")
-
-@cli.command()
-@click.option('--db-path', type=click.Path(path_type=Path), default=DEFAULT_DB_PATH, help='Directory where ChromaDB is stored')
-@click.confirmation_option(prompt='Are you sure you want to delete the entire vector store?')
-def delete_store(db_path):
-    """Delete the entire vector store directory."""
-    try:
-        shutil.rmtree(db_path)
-        click.echo(f"Vector store at {db_path} has been deleted.")
-    except FileNotFoundError:
-        click.echo(f"Vector store not found at {db_path}.")
-    except Exception as e:
-        click.echo(f"An error occurred while trying to delete the vector store: {e}")
+    models = PhotoVectorStore.list_available_models()
+    click.echo("Available models:")
+    for model in models:
+        click.echo(f"- {model}")
 
 if __name__ == '__main__':
     cli()
