@@ -5,6 +5,10 @@ from PIL import Image
 from io import BytesIO
 from ollama import generate
 import chromadb
+import torch
+import clip
+import base64
+from ollama import Client
 
 class PhotoVectorStore:
     def __init__(self, model_name='llava-phi3:latest', persist_directory='./chroma_db'):
@@ -19,26 +23,97 @@ class PhotoVectorStore:
         logging.basicConfig(level=logging.INFO)
         self.logger = logging.getLogger(__name__)
 
+        # Initialize CLIP-L model
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.clip_model, self.clip_preprocess = clip.load("ViT-L/14", device=self.device)
+
+    def _get_image_embedding(self, image_path):
+        image = self.clip_preprocess(Image.open(image_path)).unsqueeze(0).to(self.device)
+        with torch.no_grad():
+            embedding = self.clip_model.encode_image(image).cpu().numpy()[0]
+        return embedding.tolist()
+
+    def _get_text_embedding(self, text):
+        text_tokens = clip.tokenize([text]).to(self.device)
+        with torch.no_grad():
+            embedding = self.clip_model.encode_text(text_tokens).cpu().numpy()[0]
+        return embedding.tolist()
+    def _generate_description_with_ollama(self, photo_path, custom_prompt=None):
+        prompt = custom_prompt or "Describe this image in detail."
+        self.logger.debug(f"Generating description for {photo_path} with prompt: {prompt}")
+
+        try:
+            # Open and preprocess the image
+            with Image.open(photo_path) as img:
+                # Ensure the image is in RGB mode
+                if img.mode != 'RGB':
+                    img = img.convert('RGB')
+                # Resize the image if necessary
+                if max(img.size) > 1024:
+                    img.thumbnail((1024, 1024))
+                # Save the image to a BytesIO object
+                buffered = BytesIO()
+                img.save(buffered, format="PNG")
+                image_bytes = buffered.getvalue()
+
+            # Encode the image in base64
+            image_base64 = base64.b64encode(image_bytes).decode('utf-8')
+
+            # Build the payload
+            payload = {
+                "model": self.model_name,
+                "prompt": prompt,
+                "images": [image_base64]
+            }
+
+            # Create the Ollama client
+            client = Client(base_url="http://localhost:11434")  # Adjust the base_url if necessary
+
+            # Send the request and collect the response
+            response_text = ''
+            for response in client.generate(payload):
+                response_text += response.get('response', '')
+                # Optionally, you can log the response or handle partial outputs
+
+            description = response_text.strip()
+            self.logger.debug(f"Generated description: {description}")
+            return description
+        except Exception as e:
+            self.logger.error(f"Ollama generate error: {str(e)}", exc_info=True)
+            return ''
+
+
+
+    def _preprocess_image(self, img):
+        if img.mode != 'RGB':
+            img = img.convert('RGB')
+        if max(img.size) > 1024:
+            img.thumbnail((1024, 1024))
+        buffered = BytesIO()
+        img.save(buffered, format="PNG")
+        return buffered.getvalue()  # Return raw bytes
+
     def add_or_update_photo(self, photo_path, custom_prompt=None, aspect_name="default"):
         photo_path = Path(photo_path)
         self.logger.info(f"Processing image: {photo_path}")
-        
-        try:
-            with Image.open(photo_path) as img:
-                image_bytes = self._preprocess_image(img)
-            self.logger.debug(f"Image preprocessed successfully: {photo_path}")
-        except Exception as e:
-            self.logger.error(f"Error opening image {photo_path}: {str(e)}")
-            return False, f"Failed to open image: {str(e)}"
 
         try:
-            self.logger.debug(f"Generating embedding and description for {photo_path}")
-            embedding, description = self._get_embedding_and_description(image_bytes, custom_prompt)
-            self.logger.debug(f"Generated embedding (length: {len(embedding)}) and description (length: {len(description)})")
+            self.logger.debug(f"Generating embedding for {photo_path}")
+            embedding = self._get_image_embedding(photo_path)
+            self.logger.debug(f"Generated embedding (length: {len(embedding)})")
         except Exception as e:
-            self.logger.error(f"Error generating embedding and description for {photo_path}: {str(e)}", exc_info=True)
-            return False, f"Error generating embedding and description: {str(e)}"
+            self.logger.error(f"Error generating embedding for {photo_path}: {str(e)}", exc_info=True)
+            return False, f"Error generating embedding: {str(e)}"
 
+        try:
+            # Generate description using Ollama and llava-phi3
+            description = self._generate_description_with_ollama(photo_path, custom_prompt)
+            self.logger.debug(f"Generated description: {description}")
+        except Exception as e:
+            self.logger.error(f"Error generating description for {photo_path}: {str(e)}", exc_info=True)
+            return False, f"Error generating description: {str(e)}"
+
+        # Store in the database
         try:
             self.logger.debug(f"Checking for existing entries for {photo_path} and aspect '{aspect_name}'")
             existing_entries = self.collection.get(
@@ -80,67 +155,11 @@ class PhotoVectorStore:
             self.logger.error(f"Error updating ChromaDB for {photo_path}: {str(e)}", exc_info=True)
             return False, f"Database update error: {str(e)}"
 
-    def _get_embedding_and_description(self, image_bytes, custom_prompt=None):
-        prompt = custom_prompt or "Describe this image in detail."
-        self.logger.debug(f"Sending request to Ollama API with prompt: {prompt}")
-        
-        try:
-            responses = generate(
-                self.model_name,
-                prompt,
-                images=[image_bytes],
-                embedding=True,
-                stream=False
-            )
-
-            description = ''
-            embedding = []
-            for response in responses:
-                description += response.get('response', '')
-                if not embedding:
-                    embedding = response.get('embedding', [])
-            description = description.strip()
-            self.logger.debug(f"Extracted description (length: {len(description)})")
-            self.logger.debug(f"Received embedding (length: {len(embedding)})")
-            return embedding, description
-        except Exception as e:
-            self.logger.error(f"Ollama generate error: {str(e)}", exc_info=True)
-            raise
-
-    def _get_text_embedding(self, text):
-        try:
-            responses = generate(
-                self.model_name,
-                text,
-                embedding=True,
-                stream=False
-            )
-            embedding = []
-            for response in responses:
-                if not embedding:
-                    embedding = response.get('embedding', [])
-            self.logger.debug(f"Received embedding (length: {len(embedding)})")
-            return embedding
-        except Exception as e:
-            self.logger.error(f"Ollama embedding error: {str(e)}", exc_info=True)
-            return []
-
-    def _preprocess_image(self, img):
-        if img.mode != 'RGB':
-            img = img.convert('RGB')
-        if max(img.size) > 1024:
-            img.thumbnail((1024, 1024))
-        buffered = BytesIO()
-        img.save(buffered, format="PNG")
-        return buffered.getvalue()  # Return raw bytes instead of base64 string
-
     def search(self, query_image=None, query_text=None, aspect_name=None, k=5):
         self.logger.info(f"Searching with aspect: {aspect_name}, k: {k}")
         if query_image:
             self.logger.debug(f"Processing query image: {query_image}")
-            with Image.open(query_image) as img:
-                image_bytes = self._preprocess_image(img)
-            embedding, _ = self._get_embedding_and_description(image_bytes)
+            embedding = self._get_image_embedding(query_image)
         elif query_text:
             self.logger.debug(f"Processing query text: {query_text}")
             embedding = self._get_text_embedding(query_text)

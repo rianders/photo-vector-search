@@ -9,12 +9,17 @@ readme = "README.md"
 python = "^3.11"
 click = "^8.1.7"
 pillow = "^10.4.0"
-numpy = "^2.1.1"
+numpy = "1.24.3"
 chromadb = "^0.5.7"
 ollama = "^0.3.3"
 tqdm = "^4.66.5"
 requests = "^2.32.3"
 logging = "^0.4.9.6"
+torch = "2.2"
+torchvision = "^0.17"
+clip = {git = "https://github.com/openai/CLIP.git"}
+ftfy = "^6.2.3"
+regex = "^2024.9.11"
 
 
 [build-system]
