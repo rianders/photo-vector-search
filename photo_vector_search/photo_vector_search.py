@@ -38,6 +38,7 @@ class PhotoVectorStore:
         with torch.no_grad():
             embedding = self.clip_model.encode_text(text_tokens).cpu().numpy()[0]
         return embedding.tolist()
+    
     def _generate_description_with_ollama(self, photo_path, custom_prompt=None):
         prompt = custom_prompt or "Describe this image in detail."
         self.logger.debug(f"Generating description for {photo_path} with prompt: {prompt}")
@@ -63,25 +64,22 @@ class PhotoVectorStore:
             payload = {
                 "model": self.model_name,
                 "prompt": prompt,
-                "images": [image_base64]
+                "images": [image_base64],
+                "stream": False
             }
 
             # Create the Ollama client
-            client = Client(base_url="http://localhost:11434")  # Adjust the base_url if necessary
+            client = Client()
 
-            # Send the request and collect the response
-            response_text = ''
-            for response in client.generate(payload):
-                response_text += response.get('response', '')
-                # Optionally, you can log the response or handle partial outputs
+            # Send the request and get the response
+            response = client.generate(**payload)
 
-            description = response_text.strip()
+            description = response['response'].strip()
             self.logger.debug(f"Generated description: {description}")
             return description
         except Exception as e:
             self.logger.error(f"Ollama generate error: {str(e)}", exc_info=True)
             return ''
-
 
 
     def _preprocess_image(self, img):
