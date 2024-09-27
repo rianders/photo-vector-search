@@ -1,0 +1,33 @@
+ 1232  ls
+ 1233  history
+ 1234  history  | grep index
+ 1235  history
+ 1236  poetry run photo_vector_search delete-store
+ 1246  poetry run photo-vector-search  index-photos --prompt "Describe kind of image, what is it an image of, general description. Number the kind by 1.. 2.. 3.. etc." --aspect default
+ 1247  poetry run photo-vector-search  index-photos --prompt "Describe any potential ANSI/ASSE A10 Standards for Construction and Demolition: violations in this\nimage. Organize the answer as a numbered list 1... 2.. 3.." --aspect safety
+poetry run photo-vector-search search-photos ~/Downloads/red_square.png --view --verbose --k 1
+
+
+% poetry run photo-vector-search search-photos-by-text "tractor" --view --verbose --k 1
+
+2024-09-25 12:20:35,189 - INFO - Anonymized telemetry enabled. See                     https://docs.trychroma.com/telemetry for more information.
+2024-09-25 12:20:44,327 - INFO - Searching with aspect: None, k: 1
+Photo: /Users/rianders/Documents/image_tests/frame_0011.jpg
+Aspect: default
+Distance: 0.7933563773202147
+Description (default): 1. A yellow bulldozer in the background, driving on a dirt road.
+2. The front and right side of an open truck window.
+3. The view from inside a moving vehicle looking out through its windshield.
+
+% poetry run photo-vector-search search-photos-by-text "safety violation" --aspect safety  --view --verbose --k 1
+
+2024-09-25 12:21:51,467 - INFO - Anonymized telemetry enabled. See                     https://docs.trychroma.com/telemetry for more information.
+2024-09-25 12:22:00,547 - INFO - Searching with aspect: safety, k: 1
+Photo: /Users/rianders/Documents/image_tests/frame_0006.jpg
+Aspect: safety
+Distance: 0.7991689941214027
+Description (safety): 1. The man in the image is not wearing a hard hat, which violates ANSI/ASSE A10 Standards for Construction and Demolition: hard hats are required to protect workers from head injuries caused by falling or flying objects, debris, or electrical hazards.
+2. The man in the image is using a chainsaw on a piece of wood that appears to be unsecured, which violates ANSI/ASSE A10 Standards for Construction and Demolition: unsecured materials pose a risk of falling or collapsing, causing injury or damage.
+3. The man in the image is working in an environment with heavy machinery and equipment, such as a jackhammer, which violates ANSI/ASSE A10 Standards for Construction and Demolition: these standards require proper safety measures to be in place when operating or using heavy machinery.
+4. The man in the image is not wearing protective eyewear while working with the chainsaw, which violates ANSI/ASSE A10 Standards for Construction and Demolition: these standards require proper personal protective equipment to be worn at all times when operating or using heavy machinery.
+5. The man in the image is not wearing any safety gloves while working with the chainsaw, which violates ANSI/ASSE A10 Standards for Construction and Demolition: these standards require proper personal protective equipment to be worn at all times when operating or using heavy machinery.
